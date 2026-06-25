@@ -217,3 +217,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 *.docx 
+
+# MessMate specific
+*.pkl
+*.joblib
+media/
+models/
+.env
+.env.production
+node_modules/
+dist/
+build/
+.DS_Store
