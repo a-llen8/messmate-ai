@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import date
 from app.core.database import get_db
 from app.api.deps import get_current_user
-from app.models.models import User, Subscription, SubscriptionRequest, Menu, Complaint, Rating, SubStatus, RequestType, RequestStatus
+from app.models.models import User, Subscription, SubscriptionRequest, Menu, Complaint, Rating, SubStatus, RequestType, RequestStatus, PricePlan
 
 router = APIRouter(prefix="/student", tags=["student"])
 
@@ -37,9 +37,36 @@ def update_profile(
     db.commit()
     return {"message": "Profile updated"}
 
+@router.get("/price-plans")
+def get_price_plans(db: Session = Depends(get_db)):
+    plans = db.query(PricePlan).all()
+    return [{"plan_type": p.plan_type, "monthly_price": str(p.monthly_price)} for p in plans]
+
 # ── Subscription ─────────────────────────────────────────────
 class SubRequest(BaseModel):
     plan_type: str
+    start_date: date
+    end_date: date
+
+@router.get("/price-preview")
+def price_preview(
+    plan_type: str,
+    start_date: date,
+    end_date: date,
+    db: Session = Depends(get_db)
+):
+    days = (end_date - start_date).days + 1
+    if days < 7:
+        raise HTTPException(status_code=400, detail="Minimum 7 days required")
+
+    plan = db.query(PricePlan).filter(PricePlan.plan_type == plan_type).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Price not set for this plan yet")
+
+    daily_rate = float(plan.monthly_price) / 30
+    price = round(daily_rate * days, 2)
+
+    return {"days": days, "monthly_price": str(plan.monthly_price), "calculated_price": price}
 
 @router.get("/subscription")
 def get_subscription(
@@ -63,7 +90,10 @@ def request_subscription(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # check no pending request exists
+    days = (payload.end_date - payload.start_date).days + 1
+    if days < 7:
+        raise HTTPException(status_code=400, detail="Minimum 7 days required")
+
     existing = db.query(SubscriptionRequest).filter(
         SubscriptionRequest.user_id == current_user.id,
         SubscriptionRequest.status  == RequestStatus.pending,
@@ -73,10 +103,12 @@ def request_subscription(
         raise HTTPException(status_code=400, detail="Pending request already exists")
 
     req = SubscriptionRequest(
-        user_id   = current_user.id,
-        type      = RequestType.new,
-        plan_type = payload.plan_type,
-        status    = RequestStatus.pending,
+        user_id    = current_user.id,
+        type       = RequestType.new,
+        plan_type  = payload.plan_type,
+        start_date = payload.start_date,
+        end_date   = payload.end_date,
+        status     = RequestStatus.pending,
     )
     db.add(req)
     db.commit()
@@ -126,6 +158,13 @@ def submit_complaint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    sub = db.query(Subscription).filter(
+        Subscription.user_id == current_user.id,
+        Subscription.status == SubStatus.active
+    ).first()
+    if not sub:
+        raise HTTPException(status_code=403, detail="Active subscription required to file complaints")
+
     complaint = Complaint(
         user_id  = current_user.id,
         text     = payload.text,

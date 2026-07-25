@@ -8,7 +8,7 @@ from app.api.deps import get_current_user, get_caterer
 from app.models.models import (
     User, Menu, Subscription, SubscriptionRequest,
     Complaint, Attendance, MessInfo, SlotType,
-    SubStatus, RequestStatus, RequestType
+    SubStatus, RequestStatus, RequestType, PricePlan
 )
 
 router = APIRouter(prefix="/caterer", tags=["caterer"])
@@ -98,7 +98,38 @@ def list_menus(
         for m in menus
     ]
 
+# ── Price Plans ───────────────────────────────────────────────
+class PricePlanUpdate(BaseModel):
+    plan_type: str
+    monthly_price: float
+
+@router.post("/price-plans")
+def set_price_plan(
+    payload: PricePlanUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    plan = db.query(PricePlan).filter(PricePlan.plan_type == payload.plan_type).first()
+    if plan:
+        plan.monthly_price = payload.monthly_price
+    else:
+        plan = PricePlan(plan_type=payload.plan_type, monthly_price=payload.monthly_price)
+        db.add(plan)
+    db.commit()
+    return {"message": f"Price for '{payload.plan_type}' set to ₹{payload.monthly_price}"}
+
+@router.get("/price-plans")
+def get_price_plans(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    plans = db.query(PricePlan).all()
+    return [{"plan_type": p.plan_type, "monthly_price": str(p.monthly_price)} for p in plans]
+
 # ── Subscriptions ─────────────────────────────────────────────
+class ApproveRequest(BaseModel):
+    locked_price: Optional[float] = None
+
 @router.get("/subscriptions/requests")
 def get_requests(
     db: Session = Depends(get_db),
@@ -121,6 +152,7 @@ def get_requests(
 @router.post("/subscriptions/requests/{request_id}/approve")
 def approve_request(
     request_id: int,
+    payload: ApproveRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_caterer)
 ):
@@ -131,12 +163,21 @@ def approve_request(
     req.status = RequestStatus.approved
 
     if req.type == RequestType.new:
+        price = payload.locked_price
+        if price is None:
+            plan = db.query(PricePlan).filter(PricePlan.plan_type == req.plan_type).first()
+            if not plan:
+                raise HTTPException(status_code=400, detail="No price plan set — enter locked_price manually")
+            days = (req.end_date - req.start_date).days + 1
+            price = round(float(plan.monthly_price) / 30 * days, 2)
+
         sub = Subscription(
-            user_id    = req.user_id,
-            plan_type  = req.plan_type,
-            status     = SubStatus.active,
-            start_date = date.today(),
-            locked_price = 0,  # caterer sets price separately
+            user_id      = req.user_id,
+            plan_type    = req.plan_type,
+            status       = SubStatus.active,
+            start_date   = req.start_date,
+            end_date     = req.end_date,
+            locked_price = price,
         )
         db.add(sub)
 
