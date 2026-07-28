@@ -140,10 +140,12 @@ def get_requests(
     ).all()
     return [
         {
-            "id":        r.id,
-            "user_id":   r.user_id,
-            "type":      r.type,
-            "plan_type": r.plan_type,
+            "id":         r.id,
+            "user_id":    r.user_id,
+            "type":       r.type,
+            "plan_type":  r.plan_type,
+            "start_date": r.start_date,
+            "end_date":   r.end_date,
             "created_at": r.created_at,
         }
         for r in requests

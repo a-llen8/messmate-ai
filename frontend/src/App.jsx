@@ -12,6 +12,7 @@ import CatererMenu from './pages/caterer/CatererMenu'
 import CatererRequests from './pages/caterer/CatererRequests'
 import CatererComplaints from './pages/caterer/CatererComplaints'
 import CatererScan from './pages/caterer/CatererScan'
+import CatererPricing from './pages/caterer/CatererPricing'
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token')
@@ -44,6 +45,7 @@ function App() {
         <Route path="/caterer/requests" element={<CatererRoute><CatererRequests /></CatererRoute>} />
         <Route path="/caterer/complaints" element={<CatererRoute><CatererComplaints /></CatererRoute>} />
         <Route path="/caterer/scan" element={<CatererRoute><CatererScan /></CatererRoute>} />
+        <Route path="/caterer/pricing" element={<CatererRoute><CatererPricing /></CatererRoute>} />
       </Routes>
     </BrowserRouter>
   )

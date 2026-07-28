@@ -141,6 +141,7 @@ def get_today_menu(db: Session = Depends(get_db)):
         return {"message": "No menu for today"}
     return [
         {
+            "id":    m.id,
             "slot":  m.slot,
             "items": m.items,
         }
