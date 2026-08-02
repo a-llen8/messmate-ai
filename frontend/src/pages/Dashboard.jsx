@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { LogOut, User, CalendarRange, UtensilsCrossed, MessageSquare, Ticket } from 'lucide-react'
+import { LogOut, User, CalendarRange, UtensilsCrossed, MessageSquare, Ticket, QrCode } from 'lucide-react'
 import api from '../api/axios'
 
 function StatusPill({ status }) {
@@ -51,6 +51,7 @@ function Dashboard() {
     { to: '/profile', icon: User, label: 'Profile' },
     { to: '/subscription', icon: CalendarRange, label: 'Subscription' },
     { to: '/menu', icon: UtensilsCrossed, label: "Today's menu" },
+    { to: '/attendance', icon: QrCode, label: 'Give attendance' },
     { to: '/complaints', icon: MessageSquare, label: 'Complaints' },
   ]
 

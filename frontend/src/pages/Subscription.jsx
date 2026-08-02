@@ -107,7 +107,7 @@ function Subscription() {
     }
   }
 
-  const hasActive = subscription && subscription.status && subscription.status !== 'no subscription'
+  const hasActive = subscription && subscription.status === 'active'
 
   return (
     <div className="min-h-screen bg-cream pb-16">
@@ -118,6 +118,7 @@ function Subscription() {
 
       <main className="px-6 space-y-6">
         {hasActive ? (
+          <>
           <div className="relative rounded-2xl bg-teal-800 text-cream overflow-hidden shadow-lg">
             <div className="p-5 pb-4">
               <div className="flex items-start justify-between">
@@ -150,6 +151,11 @@ function Subscription() {
               </button>
             )}
           </div>
+
+          {message && (
+            <div className="text-sm text-ink/70 bg-ink/5 rounded-lg px-3 py-2 mt-4">{message}</div>
+          )}
+          </>
         ) : (
           <>
             <div>
@@ -182,6 +188,7 @@ function Subscription() {
                   <input
                     type="date"
                     value={startDate}
+                    min={new Date().toISOString().split('T')[0]}
                     onChange={(e) => setStartDate(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-lg border border-ink/10 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald"
                   />
@@ -191,6 +198,7 @@ function Subscription() {
                   <input
                     type="date"
                     value={endDate}
+                    min={startDate || new Date().toISOString().split('T')[0]}
                     onChange={(e) => setEndDate(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-lg border border-ink/10 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald"
                   />

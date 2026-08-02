@@ -87,13 +87,13 @@ function CatererPricing() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-ink/40">₹</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-ink/70">₹</span>
                     <input
                       type="number"
                       placeholder="Not set"
                       value={value}
                       onChange={(e) => setInputs({ ...inputs, [key]: e.target.value })}
-                      className="w-32 pl-7 pr-3 py-2 rounded-lg border border-ink/10 bg-cream-dim text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-emerald transition"
+                      className="w-32 pl-8 pr-3 py-2 rounded-lg border border-ink/10 bg-cream-dim text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-emerald transition"
                     />
                   </div>
                   <button

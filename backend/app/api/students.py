@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import date
 from app.core.database import get_db
+from app.core.config import PLAN_SLOTS
 from app.api.deps import get_current_user
 from app.models.models import User, Subscription, SubscriptionRequest, Menu, Complaint, Rating, SubStatus, RequestType, RequestStatus, PricePlan
 
@@ -90,6 +91,12 @@ def request_subscription(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if payload.start_date < date.today():
+        raise HTTPException(status_code=400, detail="Start date cannot be in the past")
+
+    if payload.end_date < payload.start_date:
+        raise HTTPException(status_code=400, detail="End date must be after start date")
+
     days = (payload.end_date - payload.start_date).days + 1
     if days < 7:
         raise HTTPException(status_code=400, detail="Minimum 7 days required")
@@ -134,19 +141,28 @@ def cancel_subscription(
 
 # ── Menu ─────────────────────────────────────────────────────
 @router.get("/menu/today")
-def get_today_menu(db: Session = Depends(get_db)):
+def get_today_menu(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     today = date.today()
     menus = db.query(Menu).filter(Menu.date == today).all()
     if not menus:
         return {"message": "No menu for today"}
-    return [
-        {
-            "id":    m.id,
-            "slot":  m.slot,
-            "items": m.items,
-        }
-        for m in menus
-    ]
+
+    result = []
+    for m in menus:
+        existing = db.query(Rating).filter(
+            Rating.user_id == current_user.id,
+            Rating.menu_id == m.id
+        ).first()
+        result.append({
+            "id":        m.id,
+            "slot":      m.slot,
+            "items":     m.items,
+            "my_rating": existing.score if existing else None,
+        })
+    return result
 
 # ── Complaints ───────────────────────────────────────────────
 class ComplaintRequest(BaseModel):
@@ -191,12 +207,34 @@ def submit_rating(
     if payload.score < 1 or payload.score > 5:
         raise HTTPException(status_code=400, detail="Score must be 1-5")
 
-    rating = Rating(
-        user_id = current_user.id,
-        menu_id = payload.menu_id,
-        score   = payload.score,
-        comment = payload.comment,
-    )
-    db.add(rating)
+    menu = db.query(Menu).filter(Menu.id == payload.menu_id).first()
+    if not menu:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+
+    sub = db.query(Subscription).filter(
+        Subscription.user_id == current_user.id,
+        Subscription.status == SubStatus.active
+    ).first()
+    if not sub or menu.slot not in PLAN_SLOTS.get(sub.plan_type, set()):
+        raise HTTPException(status_code=403, detail=f"Your plan doesn't include {menu.slot}")
+
+    existing = db.query(Rating).filter(
+        Rating.user_id == current_user.id,
+        Rating.menu_id == payload.menu_id
+    ).first()
+
+    if existing:
+        existing.score = payload.score
+        if payload.comment is not None:
+            existing.comment = payload.comment
+    else:
+        rating = Rating(
+            user_id = current_user.id,
+            menu_id = payload.menu_id,
+            score   = payload.score,
+            comment = payload.comment,
+        )
+        db.add(rating)
+
     db.commit()
     return {"message": "Rating submitted"}

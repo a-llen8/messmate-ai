@@ -73,10 +73,12 @@ function Profile() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-ink/70 mb-1.5">Full name</label>
+            <label htmlFor="profile-name" className="block text-sm font-medium text-ink/70 mb-1.5">Full name</label>
             <div className="relative">
               <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink/40" />
               <input
+                id="profile-name"
+                name="name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -86,10 +88,12 @@ function Profile() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-ink/70 mb-1.5">Phone</label>
+            <label htmlFor="profile-phone" className="block text-sm font-medium text-ink/70 mb-1.5">Phone</label>
             <div className="relative">
               <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink/40" />
               <input
+                id="profile-phone"
+                name="phone"
                 type="text"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}

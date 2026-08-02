@@ -8,7 +8,7 @@ from app.api.deps import get_current_user, get_caterer
 from app.models.models import (
     User, Menu, Subscription, SubscriptionRequest,
     Complaint, Attendance, MessInfo, SlotType,
-    SubStatus, RequestStatus, RequestType, PricePlan
+    SubStatus, RequestStatus, RequestType, PricePlan, Rating
 )
 
 router = APIRouter(prefix="/caterer", tags=["caterer"])
@@ -173,15 +173,26 @@ def approve_request(
             days = (req.end_date - req.start_date).days + 1
             price = round(float(plan.monthly_price) / 30 * days, 2)
 
-        sub = Subscription(
-            user_id      = req.user_id,
-            plan_type    = req.plan_type,
-            status       = SubStatus.active,
-            start_date   = req.start_date,
-            end_date     = req.end_date,
-            locked_price = price,
-        )
-        db.add(sub)
+        existing_sub = db.query(Subscription).filter(
+            Subscription.user_id == req.user_id
+        ).first()
+
+        if existing_sub:
+            existing_sub.plan_type    = req.plan_type
+            existing_sub.status       = SubStatus.active
+            existing_sub.start_date   = req.start_date
+            existing_sub.end_date     = req.end_date
+            existing_sub.locked_price = price
+        else:
+            sub = Subscription(
+                user_id      = req.user_id,
+                plan_type    = req.plan_type,
+                status       = SubStatus.active,
+                start_date   = req.start_date,
+                end_date     = req.end_date,
+                locked_price = price,
+            )
+            db.add(sub)
 
     elif req.type == RequestType.cancel:
         sub = db.query(Subscription).filter(
@@ -206,6 +217,29 @@ def reject_request(
     req.status = RequestStatus.rejected
     db.commit()
     return {"message": f"Request {request_id} rejected"}
+
+@router.get("/ratings")
+def get_ratings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    menus = db.query(Menu).order_by(Menu.date.desc()).limit(30).all()
+    result = []
+    for m in menus:
+        ratings = db.query(Rating).filter(Rating.menu_id == m.id).all()
+        if not ratings:
+            continue
+        scores = [r.score for r in ratings]
+        result.append({
+            "menu_id":      m.id,
+            "date":         m.date,
+            "slot":         m.slot,
+            "items":        m.items,
+            "avg_score":    round(sum(scores) / len(scores), 2),
+            "count":        len(scores),
+            "comments":     [r.comment for r in ratings if r.comment],
+        })
+    return result
 
 # ── Complaints ────────────────────────────────────────────────
 @router.get("/complaints")

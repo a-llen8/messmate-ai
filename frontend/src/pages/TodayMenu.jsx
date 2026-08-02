@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Coffee, Sun, Moon, Star, UtensilsCrossed } from 'lucide-react'
+import { ArrowLeft, Coffee, Sun, Moon, Star, UtensilsCrossed, Check, Lock } from 'lucide-react'
 import api from '../api/axios'
 
 const SLOT_META = {
@@ -9,7 +9,17 @@ const SLOT_META = {
   dinner:    { label: 'Dinner',    icon: Moon },
 }
 
-function StarRating({ menuId, value, onRate }) {
+const PLAN_SLOTS = {
+  full:             ['breakfast', 'lunch', 'dinner'],
+  breakfast_only:   ['breakfast'],
+  lunch_only:       ['lunch'],
+  dinner_only:      ['dinner'],
+  breakfast_lunch:  ['breakfast', 'lunch'],
+  breakfast_dinner: ['breakfast', 'dinner'],
+  lunch_dinner:     ['lunch', 'dinner'],
+}
+
+function StarRating({ value, locked, onChange }) {
   const [hover, setHover] = useState(0)
 
   return (
@@ -18,10 +28,11 @@ function StarRating({ menuId, value, onRate }) {
         <button
           key={star}
           type="button"
-          onClick={() => onRate(menuId, star)}
-          onMouseEnter={() => setHover(star)}
-          onMouseLeave={() => setHover(0)}
-          className="p-0.5"
+          disabled={locked}
+          onClick={() => onChange(star)}
+          onMouseEnter={() => !locked && setHover(star)}
+          onMouseLeave={() => !locked && setHover(0)}
+          className={`p-0.5 ${locked ? 'cursor-default' : 'cursor-pointer'}`}
         >
           <Star
             className={`w-5 h-5 transition ${
@@ -39,17 +50,46 @@ function StarRating({ menuId, value, onRate }) {
 function TodayMenu() {
   const [menu, setMenu] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [ratings, setRatings] = useState({})
+  const [pending, setPending] = useState({})
+  const [locked, setLocked] = useState({})
+  const [submitting, setSubmitting] = useState(null)
   const [message, setMessage] = useState('')
+  const [allowedSlots, setAllowedSlots] = useState([])
 
   useEffect(() => {
+    fetchSubscription()
     fetchMenu()
   }, [])
+
+  const fetchSubscription = async () => {
+    try {
+      const res = await api.get('/student/subscription')
+      const plan = res.data?.plan_type
+      const status = res.data?.status
+      if (plan && status === 'active') {
+        setAllowedSlots(PLAN_SLOTS[plan] || [])
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
 
   const fetchMenu = async () => {
     try {
       const res = await api.get('/student/menu/today')
       setMenu(res.data)
+      if (Array.isArray(res.data)) {
+        const seededPending = {}
+        const seededLocked = {}
+        res.data.forEach((m) => {
+          if (m.my_rating) {
+            seededPending[m.id] = m.my_rating
+            seededLocked[m.id] = true
+          }
+        })
+        setPending(seededPending)
+        setLocked(seededLocked)
+      }
     } catch (err) {
       console.error(err)
     } finally {
@@ -57,14 +97,23 @@ function TodayMenu() {
     }
   }
 
-  const handleRate = async (menuId, score) => {
+  const handlePick = (menuId, score) => {
+    setPending((prev) => ({ ...prev, [menuId]: score }))
+  }
+
+  const handleSubmit = async (menuId) => {
+    const score = pending[menuId]
+    if (!score) return
     setMessage('')
-    setRatings((prev) => ({ ...prev, [menuId]: score }))
+    setSubmitting(menuId)
     try {
       await api.post('/student/rating', { menu_id: menuId, score })
+      setLocked((prev) => ({ ...prev, [menuId]: true }))
       setMessage('Thanks for rating!')
     } catch (err) {
       setMessage(err.response?.data?.detail || 'Rating failed')
+    } finally {
+      setSubmitting(null)
     }
   }
 
@@ -95,6 +144,9 @@ function TodayMenu() {
           items.map((m, i) => {
             const meta = SLOT_META[m.slot] || { label: m.slot, icon: UtensilsCrossed }
             const Icon = meta.icon
+            const isLocked = !!locked[m.id]
+            const value = pending[m.id] || 0
+            const inPlan = allowedSlots.includes(m.slot)
             return (
               <div key={i} className="bg-white rounded-2xl shadow-sm border border-ink/5 p-5">
                 <div className="flex items-center gap-2 mb-2">
@@ -105,8 +157,37 @@ function TodayMenu() {
                 </div>
                 <p className="text-sm text-ink/70 mb-4 pl-10">{m.items}</p>
                 <div className="pl-10 flex items-center justify-between">
-                  <span className="text-xs text-ink/50">Rate this meal</span>
-                  <StarRating menuId={m.id} value={ratings[m.id] || 0} onRate={handleRate} />
+                  {!inPlan ? (
+                    <>
+                      <span className="text-xs text-ink/40 flex items-center gap-1">
+                        <Lock className="w-3 h-3" />
+                        Not included in your plan
+                      </span>
+                      <StarRating value={0} locked={true} onChange={() => {}} />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs text-ink/50">
+                        {isLocked ? 'Your rating' : 'Rate this meal'}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <StarRating value={value} locked={isLocked} onChange={(s) => handlePick(m.id, s)} />
+                        {!isLocked && (
+                          <button
+                            type="button"
+                            disabled={!value || submitting === m.id}
+                            onClick={() => handleSubmit(m.id)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-white bg-emerald hover:bg-emerald-dark disabled:opacity-40 px-3 py-1.5 rounded-lg transition"
+                          >
+                            {submitting === m.id ? 'Submitting…' : 'Submit'}
+                          </button>
+                        )}
+                        {isLocked && (
+                          <Check className="w-4 h-4 text-emerald-dark" />
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )

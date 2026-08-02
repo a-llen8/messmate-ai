@@ -80,6 +80,18 @@ function CatererScan() {
     }
   }
 
+  const handleMarkPresent = async (studentId) => {
+    setMessage('')
+    try {
+      const res = await api.post('/qr/manual', { user_id: studentId })
+      setMessage(`${res.data.student} — ${res.data.slot} recorded`)
+      setIsError(false)
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Could not mark present')
+      setIsError(true)
+    }
+  }
+
   return (
     <CatererLayout title="Scan" subtitle="Scan student QR codes to record attendance.">
       <div className="grid grid-cols-2 gap-6">
@@ -130,10 +142,16 @@ function CatererScan() {
                 <div className="w-7 h-7 rounded-full bg-teal-800/10 flex items-center justify-center shrink-0">
                   <UserIcon className="w-3.5 h-3.5 text-teal-700" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-ink truncate">{s.name}</p>
                   <p className="text-xs text-ink/40 truncate">{s.email}</p>
                 </div>
+                <button
+                  onClick={() => handleMarkPresent(s.id)}
+                  className="text-xs font-medium text-white bg-emerald hover:bg-emerald-dark px-3 py-1.5 rounded-lg transition shrink-0"
+                >
+                  Mark present
+                </button>
               </div>
             ))}
           </div>

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, Date, DateTime, Text, ForeignKey, Enum, Numeric, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, Float, Date, DateTime, Text, ForeignKey, Enum, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -81,13 +81,6 @@ class SubscriptionRequest(Base):
     updated_at      = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     user            = relationship("User", back_populates="subscription_requests")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id", "type",
-            name="idx_one_pending_new"
-        ),
-    )
 
 # ── Menus ───────────────────────────────────────────────────
 class Menu(Base):

@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, UtensilsCrossed, ClipboardList,
-  MessageSquare, ScanLine, Wallet, LogOut,
+  MessageSquare, ScanLine, Wallet, LogOut, Star,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { to: '/caterer/menu',       label: 'Menu',        icon: UtensilsCrossed },
   { to: '/caterer/requests',   label: 'Requests',    icon: ClipboardList },
   { to: '/caterer/complaints', label: 'Complaints',  icon: MessageSquare },
+  { to: '/caterer/ratings',    label: 'Ratings',     icon: Star },
   { to: '/caterer/pricing',    label: 'Pricing',     icon: Wallet },
   { to: '/caterer/scan',       label: 'Scan',        icon: ScanLine },
 ]

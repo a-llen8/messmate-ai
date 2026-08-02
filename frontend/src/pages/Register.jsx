@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { UtensilsCrossed, Mail, Lock, User, Phone } from 'lucide-react'
+import { UtensilsCrossed, Mail, Lock, User, Phone, Eye, EyeOff } from 'lucide-react'
 import api from '../api/axios'
 
 function Register() {
@@ -8,6 +8,7 @@ function Register() {
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -55,13 +56,22 @@ function Register() {
               <div className="relative">
                 <Icon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink/40" />
                 <input
-                  type={type}
+                  type={type === 'password' ? (showPassword ? 'text' : 'password') : type}
                   placeholder={placeholder}
                   value={value}
                   onChange={(e) => set(e.target.value)}
                   required
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-ink/10 bg-white text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-emerald transition"
+                  className={`w-full pl-10 py-3 rounded-xl border border-ink/10 bg-white text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-emerald transition ${type === 'password' ? 'pr-10' : 'pr-4'}`}
                 />
+                {type === 'password' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink/40 hover:text-ink/70"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                )}
               </div>
             </div>
           ))}
