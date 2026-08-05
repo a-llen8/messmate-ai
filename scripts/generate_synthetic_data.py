@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 from app.core.database import SessionLocal, engine
 from app.models.models import (
     User, UserRole, Subscription, SubStatus,
+    SubscriptionRequest, RequestType, RequestStatus,
     Menu, SlotType, Attendance, Rating, Complaint,
 )
 
@@ -52,6 +53,25 @@ from app.models.models import (
 NUM_STUDENTS = 200
 MONTHS       = 18
 SEED         = 42
+
+# ── Churn simulation ──────────────────────────────────────────
+# A subset of students cancel their subscription partway through. Attendance
+# visibly declines in the weeks leading up to cancellation (not a random
+# on/off switch) so a churn model actually has a learnable signal, not noise.
+CHURN_RATE          = 0.22   # fraction of students who churn at some point
+MIN_TENURE_DAYS     = 90     # no one churns in their first 3 months (needs history)
+DECAY_WINDOW_DAYS   = 45     # attendance decays over this many days before cancellation
+DECAY_FLOOR         = 0.15   # attendance probability multiplier at the moment of cancellation
+
+CHURN_REASONS = [
+    "Moving off campus",
+    "Switching to home-cooked meals",
+    "Budget constraints",
+    "Quality of food not meeting expectations",
+    "Graduating / leaving college",
+    "Health / dietary reasons",
+    "Prefer eating out",
+]
 
 PLAN_WEIGHTS = {
     "full":             0.35,
@@ -138,6 +158,7 @@ def main():
         db.query(Complaint).filter(Complaint.user_id.in_(old_ids)).delete(synchronize_session=False)
         db.query(Rating).filter(Rating.user_id.in_(old_ids)).delete(synchronize_session=False)
         db.query(Attendance).filter(Attendance.user_id.in_(old_ids)).delete(synchronize_session=False)
+        db.query(SubscriptionRequest).filter(SubscriptionRequest.user_id.in_(old_ids)).delete(synchronize_session=False)
         db.query(Subscription).filter(Subscription.user_id.in_(old_ids)).delete(synchronize_session=False)
         db.query(User).filter(User.id.in_(old_ids)).delete(synchronize_session=False)
         db.commit()
@@ -170,22 +191,55 @@ def main():
 
     student_plans = {}
     student_reliability = {}  # per-student baseline attendance propensity
+    churn_date_map = {}       # user_id -> churn date, only present for churners
+    earliest_churn = start_date + timedelta(days=MIN_TENURE_DAYS)
+
     for u in students:
         plan = weighted_choice(PLAN_WEIGHTS)
         student_plans[u.id] = plan
         student_reliability[u.id] = random.betavariate(6, 2)  # skewed toward reliable, some low outliers
 
-        sub = Subscription(
-            user_id      = u.id,
-            plan_type    = plan,
-            status       = SubStatus.active,
-            start_date   = start_date,
-            end_date     = end_date,
-            locked_price = round(random.uniform(1500, 6000), 2),
-        )
-        db.add(sub)
+        is_churner = random.random() < CHURN_RATE
+        if is_churner and earliest_churn < end_date:
+            span_days = (end_date - earliest_churn).days
+            churn_date = earliest_churn + timedelta(days=random.randint(0, span_days))
+            churn_date_map[u.id] = churn_date
+
+            sub = Subscription(
+                user_id      = u.id,
+                plan_type    = plan,
+                status       = SubStatus.cancelled,
+                start_date   = start_date,
+                end_date     = churn_date,
+                locked_price = round(random.uniform(1500, 6000), 2),
+            )
+            db.add(sub)
+            db.flush()
+
+            req = SubscriptionRequest(
+                user_id    = u.id,
+                type       = RequestType.cancel,
+                plan_type  = plan,
+                start_date = start_date,
+                end_date   = churn_date,
+                status     = RequestStatus.approved,
+                reason     = random.choice(CHURN_REASONS),
+            )
+            db.add(req)
+        else:
+            sub = Subscription(
+                user_id      = u.id,
+                plan_type    = plan,
+                status       = SubStatus.active,
+                start_date   = start_date,
+                end_date     = end_date,
+                locked_price = round(random.uniform(1500, 6000), 2),
+            )
+            db.add(sub)
     db.commit()
     print(f"  created {len(students)} students with subscriptions")
+    print(f"  {len(churn_date_map)} students churn during the period "
+          f"({len(churn_date_map)/len(students):.1%})")
 
     # ── Menus ──────────────────────────────────────────────────
     print("Generating menus...")
@@ -221,14 +275,25 @@ def main():
         is_exam = in_any_window(d, exam_windows)
 
         for u in students:
+            churn_date = churn_date_map.get(u.id)
+            if churn_date is not None and d > churn_date:
+                continue  # subscription already cancelled — no longer eligible for mess
+
             plan = student_plans[u.id]
             reliability = student_reliability[u.id]
             allowed_slots = PLAN_SLOTS[plan]
 
+            decay_mult = 1.0
+            if churn_date is not None:
+                decay_start = churn_date - timedelta(days=DECAY_WINDOW_DAYS)
+                if d >= decay_start:
+                    decay_frac = (d - decay_start).days / DECAY_WINDOW_DAYS
+                    decay_mult = 1 - (1 - DECAY_FLOOR) * min(1.0, decay_frac)
+
             for slot_name in allowed_slots:
                 menu = menu_lookup[(d, slot_name)]
 
-                p = reliability * SLOT_BASE_ATTENDANCE[slot_name]
+                p = reliability * SLOT_BASE_ATTENDANCE[slot_name] * decay_mult
                 if is_weekend:
                     p *= 0.7
                 if is_exam:
