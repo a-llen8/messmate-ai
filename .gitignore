@@ -221,9 +221,9 @@ __marimo__/
 # MessMate specific
 *.pkl
 *.joblib
-!notebooks/attendance_model.joblib
-!notebooks/attendance_model_features.joblib
-!notebooks/attendance_model_threshold.joblib
+!backend/app/ml/models/attendance_model.joblib
+!backend/app/ml/models/attendance_model_features.joblib
+!backend/app/ml/models/attendance_model_threshold.joblib
 !notebooks/churn_model.joblib
 !notebooks/churn_model_features.joblib
 !notebooks/churn_model_threshold.joblib
