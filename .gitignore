@@ -227,6 +227,8 @@ __marimo__/
 !backend/app/ml/models/churn_model.joblib
 !backend/app/ml/models/churn_model_features.joblib
 !backend/app/ml/models/churn_model_threshold.joblib
+!backend/app/ml/models/headcount_model.joblib
+!backend/app/ml/models/headcount_model_features.joblib
 media/
 .env
 .env.production
