@@ -140,11 +140,17 @@ def load_data(engine):
     return subs, attendance, ratings, complaints
 
 
+def _safe_bound(value, fallback: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    return fallback if pd.isna(ts) else ts
+
+
 def build_daily_eligibility(subs, attendance):
     print("Building daily eligibility grid + daily attendance rate...")
     rows = []
     for _, sub in subs.iterrows():
-        date_range = pd.date_range(sub['start_date'], sub['end_date'], freq='D')
+        end = _safe_bound(sub['end_date'], attendance['date'].max())
+        date_range = pd.date_range(sub['start_date'], end, freq='D')
         n_slots = len(PLAN_SLOTS[sub['plan_type']])
         for d in date_range:
             rows.append((sub['user_id'], d, n_slots))
@@ -227,7 +233,7 @@ def build_snapshots(daily, subs):
     for _, sub in subs.iterrows():
         uid = sub['user_id']
         is_churner = sub['status'] == 'cancelled'
-        sub_end = pd.Timestamp(sub['end_date'])
+        sub_end = _safe_bound(sub['end_date'], data_end)
         sub_start = pd.Timestamp(sub['start_date'])
 
         first_snapshot = sub_start + timedelta(days=MIN_HISTORY_DAYS)

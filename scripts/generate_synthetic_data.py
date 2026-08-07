@@ -232,7 +232,7 @@ def main():
                 plan_type    = plan,
                 status       = SubStatus.active,
                 start_date   = start_date,
-                end_date     = end_date,
+                end_date     = None,  # open-ended - ongoing until cancelled
                 locked_price = round(random.uniform(1500, 6000), 2),
             )
             db.add(sub)

@@ -99,6 +99,11 @@ def load_data(engine):
     return subs, attendance
 
 
+def _safe_bound(value, fallback: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    return fallback if pd.isna(ts) else ts
+
+
 def build_daily_headcount(subs, attendance):
     """
     Aggregate up to one row per (date, slot): how many students were
@@ -109,7 +114,8 @@ def build_daily_headcount(subs, attendance):
     print("Building daily eligible-count grid...")
     elig_rows = []
     for _, sub in subs.iterrows():
-        date_range = pd.date_range(sub['start_date'], sub['end_date'], freq='D')
+        end = _safe_bound(sub['end_date'], attendance['date'].max())
+        date_range = pd.date_range(sub['start_date'], end, freq='D')
         slots = PLAN_SLOTS[sub['plan_type']]
         for d in date_range:
             for slot in slots:
