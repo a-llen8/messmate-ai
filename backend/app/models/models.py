@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, Date, DateTime, Text, ForeignKey, Enum, Numeric
+from sqlalchemy import Column, Integer, String, Boolean, Float, Date, DateTime, Text, ForeignKey, Enum, Numeric, CheckConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -156,3 +156,69 @@ class PricePlan(Base):
     plan_type       = Column(String, unique=True, nullable=False)
     monthly_price   = Column(Numeric(10, 2), nullable=False)
     updated_at      = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+# ── Caterer Ops Agent ───────────────────────────────────────────
+# Scope addition on top of the SRS-locked 9-table schema (MDSS582-4) —
+# documented here as an explicit addition rather than folded into an
+# existing table, since agent runs/actions/traces have a different
+# lifecycle and access pattern (append-only, agent-written) from the
+# core operational tables above.
+
+class AgentRunStatus(str, enum.Enum):
+    completed = "completed"    # model produced a validated submit_decision
+    incomplete = "incomplete"  # hit MAX_ROUNDS without finalizing
+    error = "error"            # API/network failure ended the run early
+
+class ActionApprovalStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    edited = "edited"
+    rejected = "rejected"
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    run_date          = Column(Date, nullable=False, index=True)
+    status            = Column(Enum(AgentRunStatus), nullable=False)
+    summary           = Column(Text)  # dashboard header text, null if run didn't complete
+    tools_consulted   = Column(Text)  # JSON list, e.g. '["get_churn_risk", "get_headcount_forecast"]'
+    error             = Column(Text)  # populated for incomplete/error runs
+    created_at        = Column(DateTime, server_default=func.now())
+
+    actions           = relationship("AgentAction", back_populates="run", cascade="all, delete-orphan")
+    traces            = relationship("AgentTrace", back_populates="run", cascade="all, delete-orphan")
+
+class AgentAction(Base):
+    __tablename__ = "agent_actions"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    run_id            = Column(Integer, ForeignKey("agent_runs.id"), nullable=False, index=True)
+    category          = Column(String, nullable=False)   # churn_retention | headcount_prep | complaint_followup | general
+    priority          = Column(String, nullable=False)   # high | medium | low
+    summary           = Column(Text, nullable=False)
+    reasoning         = Column(Text, nullable=False)
+    drafted_message   = Column(Text)
+    related_user_id   = Column(Integer, ForeignKey("users.id"))
+    related_date      = Column(Date)
+    approval_status   = Column(Enum(ActionApprovalStatus), default=ActionApprovalStatus.pending, nullable=False)
+    created_at        = Column(DateTime, server_default=func.now())
+    updated_at        = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    run               = relationship("AgentRun", back_populates="actions")
+
+class AgentTrace(Base):
+    __tablename__ = "agent_traces"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    run_id            = Column(Integer, ForeignKey("agent_runs.id"), nullable=False, index=True)
+    round_num         = Column(Integer, nullable=False)
+    event_type        = Column(String, nullable=False)   # model_response | tool_call | tool_result | error
+    detail            = Column(Text, nullable=False)      # JSON blob, shape varies by event_type
+    created_at        = Column(DateTime, nullable=False)
+
+    run               = relationship("AgentRun", back_populates="traces")
+
+    __table_args__ = (
+        CheckConstraint("round_num >= 1", name="ck_agent_traces_round_positive"),
+    )
