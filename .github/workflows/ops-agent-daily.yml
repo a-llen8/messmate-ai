@@ -1,0 +1,48 @@
+name: Caterer Ops Agent - Daily Run
+
+on:
+  schedule:
+    # 03:00 UTC = 08:30 AM IST - runs before breakfast service, so the
+    # headcount forecast for "tomorrow" and churn check are ready early.
+    - cron: '0 3 * * *'
+  workflow_dispatch: {}  # allows manual trigger from the Actions tab, for testing
+
+jobs:
+  run-ops-agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      QR_SECRET: ${{ secrets.QR_SECRET }}
+      QR_SEMESTER: ${{ secrets.QR_SEMESTER }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASS: ${{ secrets.DB_PASS }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Ops Agent and persist result
+        run: |
+          python -c "
+          from app.agents.ops_agent import execute_and_save
+          run = execute_and_save()
+          print(f'Run {run.id} completed with status: {run.status}')
+          if run.status == 'error':
+              raise SystemExit(1)
+          "
