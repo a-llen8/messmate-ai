@@ -377,25 +377,16 @@ def get_headcount_forecast(target_date: date | None = None) -> list[dict]:
     target_rows["is_exam_period"] = int(_in_any_window(target_ts, exam_windows))
     target_rows["exam_proximity"] = _exam_proximity_score(target_ts, exam_windows)
 
-    target_rows = pd.get_dummies(target_rows, columns=["slot"], prefix="slot")
-    # Restore a 'slot' label column for the output (get_dummies consumed it)
-    slot_names = []
-    for _, row in target_rows.iterrows():
-        for s in ["breakfast", "lunch", "dinner"]:
-            if row.get(f"slot_{s}", False):
-                slot_names.append(s)
-                break
     target_rows = target_rows.reset_index(drop=True)
-    target_rows["slot"] = slot_names
-
-    X = target_rows.reindex(columns=feature_cols, fill_value=0)
+    slot_labels = target_rows["slot"].tolist()  # keep the label — get_dummies below consumes the column
+    X = pd.get_dummies(target_rows, columns=["slot"], prefix="slot").reindex(columns=feature_cols, fill_value=0)
     predictions = model.predict(X)
 
     results = []
     for i, row in target_rows.iterrows():
         results.append({
             "date": target_date.isoformat(),
-            "slot": row["slot"],
+            "slot": slot_labels[i],
             "predicted_headcount": round(float(predictions[i])),
             "eligible_students": int(row["eligible_students"]),
             "avg_headcount_7d": round(float(row["avg_headcount_7d"]), 1),

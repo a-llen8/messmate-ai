@@ -141,6 +141,12 @@ def run_ops_agent() -> OpsAgentRunResult:
         )
     ]
 
+    any_tool_attempted = False  # True once a real tool has been CALLED, success or fail —
+    # deliberately separate from result.tools_consulted (successes only). Blocks the
+    # degenerate "finalize with zero effort" case while still allowing the legitimate
+    # graceful-degradation case (every tool failed, model honestly reports that) to
+    # reach submit_decision — that path is real and was observed in production.
+
     for round_num in range(1, MAX_ROUNDS + 1):
         try:
             response = client.models.generate_content(model=MODEL_NAME, contents=contents, config=config)
@@ -185,6 +191,16 @@ def run_ops_agent() -> OpsAgentRunResult:
             result.traces.append(TraceEvent(round_num, "tool_call", {"tool": fc.name, "args": args}))
 
             if fc.name == "submit_decision":
+                if not any_tool_attempted:
+                    result.traces.append(TraceEvent(round_num, "error", {
+                        "tool": fc.name, "detail": "submit_decision called before any lookup tool was attempted",
+                    }))
+                    response_parts.append(types.Part.from_function_response(
+                        name=fc.name,
+                        response={"error": "Call get_churn_risk and/or get_headcount_forecast first — "
+                                            "you haven't checked anything yet this run."},
+                    ))
+                    continue
                 try:
                     args.setdefault("run_date", date.today().isoformat())
                     decision = OpsAgentDecision.model_validate(args)
@@ -202,6 +218,7 @@ def run_ops_agent() -> OpsAgentRunResult:
                         response={"error": f"Validation failed, fix and re-call submit_decision: {e}"},
                     ))
             else:
+                any_tool_attempted = True
                 tool_response = _run_tool_call(fc.name, args, result, round_num)
                 response_parts.append(types.Part.from_function_response(name=fc.name, response=tool_response))
 
@@ -221,12 +238,23 @@ def execute_and_save(db: Session | None = None) -> "AgentRun":  # noqa: F821 —
     """Runs the agent and persists agent_runs / agent_actions / agent_traces.
     Import of AgentRun/AgentAction/AgentTrace is local to avoid a hard
     dependency on the DB models for callers that only want run_ops_agent()."""
-    from app.models.models import AgentRun, AgentAction, AgentTrace  # local import, see docstring
+    from app.models.models import AgentRun, AgentAction, AgentTrace, User  # local import, see docstring
 
     owns_session = db is None
     db = db or SessionLocal()
     try:
         result = run_ops_agent()
+
+        # related_user_id comes from the model, based on what get_churn_risk returned
+        # earlier in the SAME run — normally trustworthy, but an LLM can misremember an
+        # ID across rounds. A bad FK reference here would fail the single commit() below
+        # and silently lose every action AND every trace from an otherwise-good run, not
+        # just the one bad action. Check against real users up front instead.
+        referenced_ids = {a.related_user_id for a in (result.decision.actions if result.decision else [])
+                           if a.related_user_id is not None}
+        valid_ids = set()
+        if referenced_ids:
+            valid_ids = {row[0] for row in db.query(User.id).filter(User.id.in_(referenced_ids)).all()}
 
         run = AgentRun(
             run_date=date.today(),
@@ -240,6 +268,15 @@ def execute_and_save(db: Session | None = None) -> "AgentRun":  # noqa: F821 —
 
         if result.decision:
             for action in result.decision.actions:
+                related_user_id = action.related_user_id
+                if related_user_id is not None and related_user_id not in valid_ids:
+                    finalize_round = result.traces[-1].round_num if result.traces else 1
+                    result.traces.append(TraceEvent(finalize_round, "error", {
+                        "detail": f"submit_decision referenced related_user_id={related_user_id}, "
+                                  f"which doesn't exist — dropped from the saved action rather than "
+                                  f"failing the whole run",
+                    }))
+                    related_user_id = None
                 db.add(AgentAction(
                     run_id=run.id,
                     category=action.category.value,
@@ -247,7 +284,7 @@ def execute_and_save(db: Session | None = None) -> "AgentRun":  # noqa: F821 —
                     summary=action.summary,
                     reasoning=action.reasoning,
                     drafted_message=action.drafted_message,
-                    related_user_id=action.related_user_id,
+                    related_user_id=related_user_id,
                     related_date=action.related_date,
                     approval_status="pending",
                 ))
