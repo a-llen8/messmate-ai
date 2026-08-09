@@ -26,7 +26,7 @@ the actual trigger is separate work, not done here.
 """
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from google import genai
 from google.genai import types
@@ -89,7 +89,7 @@ class TraceEvent:
         self.round_num = round_num
         self.event_type = event_type  # "model_response" | "tool_call" | "tool_result" | "error"
         self.detail = detail
-        self.timestamp = datetime.utcnow()
+        self.timestamp = datetime.now(timezone.utc)
 
 
 class OpsAgentRunResult:
