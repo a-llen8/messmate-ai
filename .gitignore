@@ -229,6 +229,9 @@ __marimo__/
 !backend/app/ml/models/churn_model_threshold.joblib
 !backend/app/ml/models/headcount_model.joblib
 !backend/app/ml/models/headcount_model_features.joblib
+!backend/app/ml/models/complaint_clusterer.joblib
+!backend/app/ml/models/complaint_umap_reducer.joblib
+!backend/app/ml/models/complaint_cluster_labels.joblib
 media/
 .env
 .env.production
@@ -237,3 +240,4 @@ dist/
 build/
 .DS_Store*.bak
 *.sql
+

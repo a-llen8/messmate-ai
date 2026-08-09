@@ -117,6 +117,21 @@ COMPLAINT_TEMPLATES = [
     "The {slot} tasted stale, please check the ingredients.",
 ]
 
+def load_complaint_pool():
+    import json
+    pool_path = os.path.join(os.path.dirname(__file__), "data", "complaint_pool.json")
+    if not os.path.exists(pool_path):
+        print("WARNING: complaint_pool.json not found — run generate_complaint_pool.py first.")
+        print("Falling back to the 15 fixed COMPLAINT_TEMPLATES strings.")
+        return {
+            slot: [t.format(slot=slot) for t in COMPLAINT_TEMPLATES]
+            for slot in ["breakfast", "lunch", "dinner"]
+        }
+    with open(pool_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+COMPLAINT_POOL = load_complaint_pool()
+
 random.seed(SEED)
 
 
@@ -328,10 +343,9 @@ def main():
 
                         # low ratings sometimes turn into a complaint
                         if score <= 2 and random.random() < 0.3:
-                            template = random.choice(COMPLAINT_TEMPLATES)
                             complaint_batch.append({
                                 "user_id":  u.id,
-                                "text":     template.format(slot=slot_name),
+                                "text":     random.choice(COMPLAINT_POOL[slot_name]),
                                 "category": random.choice(COMPLAINT_CATEGORIES),
                                 "status":   random.choice(["open", "resolved", "resolved", "resolved"]),
                             })

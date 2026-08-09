@@ -39,7 +39,7 @@ Requires the same DB the backend uses (reads DB_PASS + GEMINI_API_KEY from
 project-root .env). Requires: pandas, numpy, sqlalchemy, psycopg2-binary,
 hdbscan, sentence-transformers, google-genai, python-dotenv, joblib
 
-    pip install hdbscan sentence-transformers google-genai --break-system-packages
+    pip install hdbscan sentence-transformers umap-learn google-genai --break-system-packages
     (run once, in your venv — sentence-transformers is a ~500MB download the
     first time, since it pulls the embedding model weights)
 """
@@ -56,11 +56,15 @@ import joblib
 # ── Config ──────────────────────────────────────────────────────
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"   # local sentence-transformers model, free, no quota
 LABELING_MODEL = "gemini-3.1-flash-lite"
-MIN_CLUSTER_SIZE = 12          # smallest group HDBSCAN will call a real cluster
+MIN_CLUSTER_SIZE = 10          # smallest group HDBSCAN will call a real cluster
+MIN_SAMPLES = 3                 # lower = less conservative about merging nearby points into one cluster
 SAMPLE_TEXTS_FOR_LABELING = 8  # how many example complaints Gemini sees per cluster
 
-OUTPUT_CLUSTERER_PATH = "complaint_clusterer.joblib"
-OUTPUT_LABELS_PATH = "complaint_cluster_labels.joblib"
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "backend", "app", "ml", "models")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_CLUSTERER_PATH = os.path.join(OUTPUT_DIR, "complaint_clusterer.joblib")
+OUTPUT_REDUCER_PATH = os.path.join(OUTPUT_DIR, "complaint_umap_reducer.joblib")
+OUTPUT_LABELS_PATH = os.path.join(OUTPUT_DIR, "complaint_cluster_labels.joblib")
 OUTPUT_ASSIGNMENTS_PATH = "complaint_cluster_assignments.csv"
 
 
@@ -93,19 +97,42 @@ def embed_complaints(texts):
 
 def cluster_embeddings(embeddings):
     import hdbscan
-    print(f"Clustering with HDBSCAN (min_cluster_size={MIN_CLUSTER_SIZE})...")
+    import umap
+
+    # HDBSCAN is density-based, and density estimates fall apart in high
+    # dimensions (the "curse of dimensionality" — in 384-dim space, almost
+    # all points end up nearly equidistant from each other, so there's no
+    # real density signal left to find clusters in). This is the standard
+    # reason HDBSCAN reports "0 clusters, 100% noise" on raw sentence
+    # embeddings even when the underlying text is clearly grouped — it's
+    # the same reduce-then-cluster recipe BERTopic uses under the hood.
+    print("Reducing embeddings to 5 dimensions with UMAP before clustering...")
+    n_neighbors = min(8, max(2, len(embeddings) - 1))
+    reducer = umap.UMAP(
+        n_neighbors=n_neighbors,  # smaller = UMAP preserves finer local structure
+        n_components=5,           # instead of smoothing toward a few broad blobs
+        min_dist=0.0,
+        metric='cosine',       # cosine distance is the right notion of
+        random_state=42,       # similarity for sentence embeddings
+    )
+    reduced_embeddings = reducer.fit_transform(embeddings)
+
+    print(f"Clustering with HDBSCAN (min_cluster_size={MIN_CLUSTER_SIZE}, min_samples={MIN_SAMPLES})...")
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=MIN_CLUSTER_SIZE,
-        metric='euclidean',
+        min_samples=MIN_SAMPLES,
+        metric='euclidean',    # euclidean on the UMAP-reduced space, not the raw embeddings
+        # cluster_selection_method left at the default ('eom') — 'leaf' over-split one
+        # real category (undercooked food) into two clusters with an identical label
         prediction_data=True,  # required to assign future complaints later via approximate_predict
     )
-    cluster_ids = clusterer.fit_predict(embeddings)
+    cluster_ids = clusterer.fit_predict(reduced_embeddings)
 
     n_clusters = len(set(cluster_ids)) - (1 if -1 in cluster_ids else 0)
     n_noise = (cluster_ids == -1).sum()
     print(f"  Found {n_clusters} clusters, {n_noise} complaints unclustered "
           f"({n_noise / len(cluster_ids):.1%} — labeled 'Uncategorized / one-off')")
-    return clusterer, cluster_ids
+    return clusterer, reducer, cluster_ids
 
 
 def label_clusters(client, complaints, cluster_ids):
@@ -191,7 +218,7 @@ def main():
     complaints = load_complaints(engine)
     unique_texts, index_map = dedupe_texts(complaints)
     unique_embeddings = embed_complaints(unique_texts)
-    clusterer, unique_cluster_ids = cluster_embeddings(unique_embeddings)
+    clusterer, reducer, unique_cluster_ids = cluster_embeddings(unique_embeddings)
     cluster_ids = unique_cluster_ids[index_map]  # broadcast back to every row
     n_noise_total = (cluster_ids == -1).sum()
     print(f"  Broadcast to all {len(complaints)} complaints: "
@@ -212,18 +239,23 @@ def main():
     print(summary.to_string(index=False))
 
     joblib.dump(clusterer, OUTPUT_CLUSTERER_PATH)
+    joblib.dump(reducer, OUTPUT_REDUCER_PATH)
     joblib.dump(labels, OUTPUT_LABELS_PATH)
     complaints_with_clusters.drop(columns=['text']).to_csv(OUTPUT_ASSIGNMENTS_PATH, index=False)
     # (text dropped from the CSV to avoid duplicating raw complaint content outside the DB;
     #  join back on complaint id if the full text is needed downstream)
 
     print(f"\nSaved: {OUTPUT_CLUSTERER_PATH}")
+    print(f"Saved: {OUTPUT_REDUCER_PATH}")
     print(f"Saved: {OUTPUT_LABELS_PATH}")
     print(f"Saved: {OUTPUT_ASSIGNMENTS_PATH}")
     print("\nNote: to assign a NEW complaint to an existing cluster later without "
-          "re-running this whole script, embed its text with the SAME local model "
-          f"({EMBEDDING_MODEL}), then use "
-          "hdbscan.approximate_predict(clusterer, [new_embedding]).")
+          "re-running this whole script: embed its text with the SAME local model "
+          f"({EMBEDDING_MODEL}), reduce it with the saved UMAP reducer "
+          f"({OUTPUT_REDUCER_PATH} — reducer.transform([embedding]), NOT fit_transform), "
+          "then call hdbscan.approximate_predict(clusterer, [reduced_embedding]). "
+          "Skipping the reducer step will silently give wrong cluster assignments, "
+          "since the clusterer was fit on the reduced 5-dim space, not the raw embedding.")
 
 
 if __name__ == "__main__":
