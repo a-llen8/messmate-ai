@@ -1,0 +1,16 @@
+# Heavy ML deps used ONLY by get_complaint_cluster_trend (embedding +
+# UMAP + HDBSCAN clustering). Split out of requirements.txt so the daily
+# (headcount) and weekly (churn) Ops Agent workflows don't pay the ~2 min
+# install cost for deps they never import — only ops-agent-monthly.yml
+# installs this file, on top of requirements.txt.
+#
+# Install alongside requirements.txt, not instead of it:
+#   pip install -r requirements.txt
+#   pip install -r requirements-ml.txt
+hdbscan==0.8.44
+umap-learn==0.5.12
+numba==0.66.0
+llvmlite==0.48.0
+sentence-transformers==5.6.1
+torch==2.13.0
+transformers==5.14.1

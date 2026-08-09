@@ -209,7 +209,10 @@ def call_get_complaint_cluster_trend(days: int = 14) -> dict:
 
 
 # ── Registry ─────────────────────────────────────────────────────────────
-ACTIVE_TOOLS: list[types.FunctionDeclaration] = [
+# ALL_TOOLS holds every tool's FunctionDeclaration, regardless of cadence.
+# Which ones are actually offered to the model on a given run is decided by
+# get_active_tools(run_mode) below — NOT by editing this list directly.
+ALL_TOOLS: list[types.FunctionDeclaration] = [
     TOOL_CHURN_RISK, TOOL_HEADCOUNT, TOOL_COMPLAINT_TREND,
 ]
 
@@ -218,3 +221,29 @@ TOOL_REGISTRY = {
     "get_headcount_forecast": call_get_headcount_forecast,
     "get_complaint_cluster_trend": call_get_complaint_cluster_trend,
 }
+
+# One mode per tool. This is the single source of truth for which GitHub
+# Actions schedule a given tool belongs to — the daily/weekly/monthly
+# workflow YAMLs don't decide this, they just set RUN_MODE and this map
+# does the routing. Update THIS if a tool's cadence ever changes, not the
+# workflow files.
+TOOL_CADENCE: dict[str, str] = {
+    "get_headcount_forecast": "daily",
+    "get_churn_risk": "weekly",
+    "get_complaint_cluster_trend": "monthly",
+}
+
+VALID_RUN_MODES = frozenset(TOOL_CADENCE.values())  # {"daily", "weekly", "monthly"}
+
+def get_active_tools(run_mode: str) -> list[types.FunctionDeclaration]:
+    """Returns the FunctionDeclaration(s) whose cadence matches run_mode.
+    Each run_mode currently maps to exactly one tool (daily->headcount,
+    weekly->churn, monthly->complaint) — if that ever changes to multiple
+    tools per mode, this function's behavior (filter, not fixed-index)
+    still holds without changes here.
+    """
+    if run_mode not in VALID_RUN_MODES:
+        raise ValueError(
+            f"Unknown RUN_MODE '{run_mode}'. Must be one of {sorted(VALID_RUN_MODES)}."
+        )
+    return [tool for tool in ALL_TOOLS if TOOL_CADENCE[tool.name] == run_mode]

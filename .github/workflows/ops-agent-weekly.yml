@@ -1,11 +1,11 @@
-name: Caterer Ops Agent - Daily Run
+name: Caterer Ops Agent - Weekly Run
 
 on:
   schedule:
-    # 03:00 UTC = 08:30 AM IST - runs before breakfast service, so the
-    # headcount forecast for "tomorrow" is ready early. (Churn check moved
-    # to ops-agent-weekly.yml, complaint clustering to ops-agent-monthly.yml.)
-    - cron: '0 3 * * *'
+    # 03:00 UTC Monday = 08:30 AM IST Monday - same time-of-day as the
+    # daily run, just once a week. Churn signal is a 30-day rolling window
+    # and doesn't meaningfully shift day to day, so weekly is enough.
+    - cron: '0 3 * * 1'
   workflow_dispatch: {}  # allows manual trigger from the Actions tab, for testing
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
       QR_SEMESTER: ${{ secrets.QR_SEMESTER }}
       DB_USER: ${{ secrets.DB_USER }}
       DB_PASS: ${{ secrets.DB_PASS }}
-      RUN_MODE: daily
+      RUN_MODE: weekly
 
     steps:
       - name: Check out repo
