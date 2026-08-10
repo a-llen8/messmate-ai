@@ -1,11 +1,12 @@
-name: Caterer Ops Agent - Daily Run
+name: Caterer Ops Agent - Monthly Run
 
 on:
   schedule:
-    # 03:00 UTC = 08:30 AM IST - runs before breakfast service, so the
-    # headcount forecast for "tomorrow" is ready early. (Churn check moved
-    # to ops-agent-weekly.yml, complaint clustering to ops-agent-monthly.yml.)
-    - cron: '0 3 * * *'
+    # 03:00 UTC on the 1st = 08:30 AM IST on the 1st of each month. The
+    # complaint clusterer uses a 14-day rolling window that barely changes
+    # day to day, and this is the only tool needing the heavy embedding /
+    # UMAP / HDBSCAN stack, so it gets its own slow, infrequent workflow.
+    - cron: '0 3 1 * *'
   workflow_dispatch: {}  # allows manual trigger from the Actions tab, for testing
 
 jobs:
@@ -25,7 +26,7 @@ jobs:
       QR_SEMESTER: ${{ secrets.QR_SEMESTER }}
       DB_USER: ${{ secrets.DB_USER }}
       DB_PASS: ${{ secrets.DB_PASS }}
-      RUN_MODE: daily
+      RUN_MODE: monthly
 
     steps:
       - name: Check out repo
@@ -37,7 +38,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-ml.txt
 
       - name: Run Ops Agent and persist result
         run: |

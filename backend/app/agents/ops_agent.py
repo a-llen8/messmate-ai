@@ -7,25 +7,29 @@ for itself whether to call another tool or finalize, via a `submit_decision`
 function call that IS the finalize action rather than a separate code path
 — it goes through the same validate/retry machinery as any other tool call.
 
-Currently wired with only get_churn_risk + get_headcount_forecast (see
-tools.py — complaint cluster trend is parked). The system prompt below
-only promises the tools actually in ACTIVE_TOOLS; when the complaint tool
-is added, update the prompt too.
+All 3 tools (get_headcount_forecast, get_churn_risk, get_complaint_cluster_trend)
+are registered in tools.py, but only ONE is active on any given run — which
+one is decided by RUN_MODE (daily/weekly/monthly), via
+tools.get_active_tools(run_mode). See tools.py's TOOL_CADENCE for the
+mode->tool mapping. SYSTEM_PROMPT and the no-function-call nudge below are
+both built dynamically per run_mode so the model is never told about a
+tool it wasn't given this run.
 
-Run this directly for a manual test:
+Run this directly for a manual test (defaults to RUN_MODE=daily if unset):
     cd backend
     venv\\Scripts\\activate
+    set RUN_MODE=weekly
     python -m app.agents.ops_agent
 
-Not yet wired to a scheduler. Doc's plan was Celery beat, daily — but
-there's no celery app instance configured yet (app/celery/__init__.py is
-empty) and the deployment story for a long-running worker is still
-undecided (see project notes: college server vs. GitHub Actions cron).
-execute_and_save() below is the entrypoint either path would call; wiring
-the actual trigger is separate work, not done here.
+Wired to 3 separate GitHub Actions workflows (ops-agent-daily.yml,
+ops-agent-weekly.yml, ops-agent-monthly.yml), each setting RUN_MODE and
+calling execute_and_save(). There's no celery app instance configured yet
+(app/celery/__init__.py is empty), so GitHub Actions cron is the live
+scheduler, not Celery beat.
 """
 
 import json
+import os
 from datetime import date, datetime, timezone
 
 from google import genai
@@ -35,7 +39,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.agents.tools import ACTIVE_TOOLS, TOOL_REGISTRY
+from app.agents.tools import get_active_tools, TOOL_REGISTRY, VALID_RUN_MODES
 from app.agents.schemas import OpsAgentDecision, SUBMIT_DECISION_PARAMETERS_SCHEMA
 
 MODEL_NAME = "gemini-3.1-flash-lite"  # matches notebooks/churn_model.ipynb's retention-message SDK choice
@@ -52,14 +56,29 @@ SUBMIT_DECISION_TOOL = types.FunctionDeclaration(
     parameters_json_schema=SUBMIT_DECISION_PARAMETERS_SCHEMA,
 )
 
-SYSTEM_PROMPT = """You are the MessMate Caterer Ops Agent, running once daily.
+_TOOL_PROMPT_LINES = {
+    "get_headcount_forecast": "- get_headcount_forecast: predicted headcount per meal slot for tomorrow",
+    "get_churn_risk": "- get_churn_risk: at-risk students, scored today",
+    "get_complaint_cluster_trend": "- get_complaint_cluster_trend: trending complaint clusters over the last N days",
+}
 
-Your job: review student churn risk and tomorrow's headcount forecast, and
-decide what (if anything) the caterer should act on today. You have two
-lookup tools and one finalize tool:
+_RUN_MODE_BLURB = {
+    "daily": "review tomorrow's headcount forecast",
+    "weekly": "review student churn risk",
+    "monthly": "review trending complaint clusters",
+}
 
-- get_churn_risk: at-risk students, scored today
-- get_headcount_forecast: predicted headcount per meal slot for tomorrow
+
+def _build_system_prompt(run_mode: str, tool_names: list[str]) -> str:
+    tool_lines = "\n".join(_TOOL_PROMPT_LINES[name] for name in tool_names)
+    plural = "tool" if len(tool_names) == 1 else "tools"
+    return f"""You are the MessMate Caterer Ops Agent, running in {run_mode} mode today.
+
+Your job: {_RUN_MODE_BLURB.get(run_mode, "review today's data")}, and decide
+what (if anything) the caterer should act on. You have {len(tool_names)} lookup
+{plural} and one finalize tool:
+
+{tool_lines}
 - submit_decision: finalize your run with a structured decision (call this
   last, after you've checked the data — not as your first move)
 
@@ -74,9 +93,9 @@ Guidelines:
 - Nothing you decide gets sent or executed automatically — the caterer
   approves, edits, or rejects each action in the dashboard. Draft
   accordingly: assume a human reads and can adjust before anything goes out.
-- You get up to a few rounds. Check the tools relevant to today, then call
-  submit_decision. Don't call the same tool twice unless you have a real
-  reason to (e.g. re-checking with a different date).
+- You get up to a few rounds. Check the tool(s) relevant to today, then
+  call submit_decision. Don't call the same tool twice unless you have a
+  real reason to (e.g. re-checking with a different date).
 """
 
 
@@ -122,15 +141,23 @@ def _run_tool_call(name: str, args: dict, result: OpsAgentRunResult, round_num: 
         return payload
 
 
-def run_ops_agent() -> OpsAgentRunResult:
+def run_ops_agent(run_mode: str = "daily") -> OpsAgentRunResult:
     """Runs the agent loop end-to-end. Pure — does not touch the DB. See
-    execute_and_save() for the persisted version."""
+    execute_and_save() for the persisted version.
+
+    run_mode selects which single tool is offered this run (daily->headcount,
+    weekly->churn, monthly->complaint) via tools.get_active_tools(). Raises
+    ValueError up front for an unknown run_mode rather than silently running
+    with zero lookup tools."""
+    active_tools = get_active_tools(run_mode)  # raises ValueError if run_mode is bad
+    tool_names = [t.name for t in active_tools]
+
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     result = OpsAgentRunResult()
 
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        tools=[types.Tool(function_declarations=ACTIVE_TOOLS + [SUBMIT_DECISION_TOOL])],
+        system_instruction=_build_system_prompt(run_mode, tool_names),
+        tools=[types.Tool(function_declarations=active_tools + [SUBMIT_DECISION_TOOL])],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
@@ -173,11 +200,12 @@ def run_ops_agent() -> OpsAgentRunResult:
         }))
 
         if not function_calls:
-            # Nudge once instead of silently ending the run
+            # Nudge once instead of silently ending the run — lists only the
+            # tool(s) actually active this run_mode, not a hardcoded pair.
             contents.append(types.Content(
                 role="user",
                 parts=[types.Part.from_text(
-                    text="Call a tool (get_churn_risk / get_headcount_forecast) or, if you've "
+                    text=f"Call a tool ({' / '.join(tool_names)}) or, if you've "
                          "already checked what's relevant, call submit_decision to finish."
                 )],
             ))
@@ -197,7 +225,7 @@ def run_ops_agent() -> OpsAgentRunResult:
                     }))
                     response_parts.append(types.Part.from_function_response(
                         name=fc.name,
-                        response={"error": "Call get_churn_risk and/or get_headcount_forecast first — "
+                        response={"error": f"Call {' or '.join(tool_names)} first — "
                                             "you haven't checked anything yet this run."},
                     ))
                     continue
@@ -234,16 +262,28 @@ def run_ops_agent() -> OpsAgentRunResult:
     return result
 
 
-def execute_and_save(db: Session | None = None) -> "AgentRun":  # noqa: F821 — see app.models.models
+def execute_and_save(db: Session | None = None, run_mode: str | None = None) -> "AgentRun":  # noqa: F821
     """Runs the agent and persists agent_runs / agent_actions / agent_traces.
     Import of AgentRun/AgentAction/AgentTrace is local to avoid a hard
-    dependency on the DB models for callers that only want run_ops_agent()."""
+    dependency on the DB models for callers that only want run_ops_agent().
+
+    run_mode: "daily" | "weekly" | "monthly". If not passed explicitly,
+    read from the RUN_MODE env var (set by the calling GitHub Actions
+    workflow), defaulting to "daily" if that's unset too — so existing
+    callers that don't pass run_mode at all keep behaving like the old
+    daily-only setup did.
+
+    No agent_runs schema change needed to know which mode a given run was:
+    result.tools_consulted (saved below) already names the one tool that
+    ran, which uniquely identifies the mode via tools.TOOL_CADENCE.
+    """
+    run_mode = run_mode or os.environ.get("RUN_MODE", "daily")
     from app.models.models import AgentRun, AgentAction, AgentTrace, User  # local import, see docstring
 
     owns_session = db is None
     db = db or SessionLocal()
     try:
-        result = run_ops_agent()
+        result = run_ops_agent(run_mode)
 
         # related_user_id comes from the model, based on what get_churn_risk returned
         # earlier in the SAME run — normally trustworthy, but an LLM can misremember an
@@ -308,8 +348,10 @@ def execute_and_save(db: Session | None = None) -> "AgentRun":  # noqa: F821 —
 
 if __name__ == "__main__":
     # Manual test run — does NOT write to the DB, just prints what the
-    # agent decided. Useful before wiring execute_and_save() into anything.
-    outcome = run_ops_agent()
+    # agent decided. Reads RUN_MODE from env (defaults to "daily"), same
+    # as execute_and_save() does — e.g. `set RUN_MODE=weekly` first on
+    # Windows CMD, or `$env:RUN_MODE="weekly"` in PowerShell.
+    outcome = run_ops_agent(os.environ.get("RUN_MODE", "daily"))
     print(f"Status: {outcome.status}")
     if outcome.error:
         print(f"Error: {outcome.error}")
