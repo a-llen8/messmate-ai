@@ -9,6 +9,7 @@ import Complaints from './pages/Complaints'
 import GiveAttendance from './pages/GiveAttendance'
 
 import CatererDashboard from './pages/caterer/CatererDashboard'
+import CatererAgentReview from './pages/caterer/CatererAgentReview'
 import CatererMenu from './pages/caterer/CatererMenu'
 import CatererRequests from './pages/caterer/CatererRequests'
 import CatererComplaints from './pages/caterer/CatererComplaints'
@@ -52,6 +53,7 @@ function App() {
         <Route path="/complaints" element={<PrivateRoute><Complaints /></PrivateRoute>} />
 
         <Route path="/caterer" element={<CatererRoute><CatererDashboard /></CatererRoute>} />
+        <Route path="/caterer/recommendations" element={<CatererRoute><CatererAgentReview /></CatererRoute>} />
         <Route path="/caterer/menu" element={<CatererRoute><CatererMenu /></CatererRoute>} />
         <Route path="/caterer/requests" element={<CatererRoute><CatererRequests /></CatererRoute>} />
         <Route path="/caterer/complaints" element={<CatererRoute><CatererComplaints /></CatererRoute>} />

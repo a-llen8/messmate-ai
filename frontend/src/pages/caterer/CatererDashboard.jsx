@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Users, CalendarCheck, UtensilsCrossed,
-  MessageSquare, ClipboardList, ArrowRight,
+  MessageSquare, ClipboardList, ArrowRight, Sparkles,
 } from 'lucide-react'
 import api from '../../api/axios'
 import CatererLayout from '../../components/CatererLayout'
@@ -36,6 +36,7 @@ function CatererDashboard() {
   }
 
   const quickLinks = [
+    { to: '/caterer/recommendations', label: 'Review agent recommendations', icon: Sparkles },
     { to: '/caterer/menu', label: "Update today's menu", icon: UtensilsCrossed },
     { to: '/caterer/requests', label: 'Review subscription requests', icon: ClipboardList },
     { to: '/caterer/complaints', label: 'Check open complaints', icon: MessageSquare },
@@ -53,7 +54,7 @@ function CatererDashboard() {
             <StatCard label="Today's attendance" value={stats.today_attendance} icon={UtensilsCrossed} />
           </div>
 
-          <div className="grid grid-cols-2 gap-4 mb-8">
+          <div className="grid grid-cols-3 gap-4 mb-8">
             <div className="bg-white rounded-xl border border-ink/10 p-5 flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-ink/50 uppercase tracking-wide mb-1">Open complaints</p>
@@ -72,6 +73,18 @@ function CatererDashboard() {
                 <span className="w-2.5 h-2.5 rounded-full bg-amber" />
               )}
             </div>
+            <Link
+              to="/caterer/recommendations"
+              className="bg-white rounded-xl border border-ink/10 p-5 flex items-center justify-between hover:border-teal-700/30 transition"
+            >
+              <div>
+                <p className="text-xs font-medium text-ink/50 uppercase tracking-wide mb-1">Agent recommendations</p>
+                <p className="font-display text-2xl font-semibold text-ink">{stats.pending_agent_actions}</p>
+              </div>
+              {stats.pending_agent_actions > 0 && (
+                <span className="w-2.5 h-2.5 rounded-full bg-teal-700" />
+              )}
+            </Link>
           </div>
 
           <p className="text-xs font-medium text-ink/50 uppercase tracking-wide mb-3">Quick actions</p>

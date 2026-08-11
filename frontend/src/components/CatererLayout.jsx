@@ -1,11 +1,12 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, UtensilsCrossed, ClipboardList,
-  MessageSquare, ScanLine, Wallet, LogOut, Star,
+  MessageSquare, ScanLine, Wallet, LogOut, Star, Sparkles,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
   { to: '/caterer',            label: 'Dashboard',  icon: LayoutDashboard },
+  { to: '/caterer/recommendations', label: 'Recommendations', icon: Sparkles },
   { to: '/caterer/menu',       label: 'Menu',        icon: UtensilsCrossed },
   { to: '/caterer/requests',   label: 'Requests',    icon: ClipboardList },
   { to: '/caterer/complaints', label: 'Complaints',  icon: MessageSquare },
