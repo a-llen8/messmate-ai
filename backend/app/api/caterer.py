@@ -3,13 +3,16 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date
+import json
 from app.core.database import get_db
 from app.api.deps import get_current_user, get_caterer
 from app.models.models import (
     User, Menu, Subscription, SubscriptionRequest,
     Complaint, Attendance, MessInfo, SlotType,
-    SubStatus, RequestStatus, RequestType, PricePlan, Rating
+    SubStatus, RequestStatus, RequestType, PricePlan, Rating,
+    AgentRun, AgentAction, ActionApprovalStatus
 )
+from app.agents.tools import TOOL_CADENCE
 
 router = APIRouter(prefix="/caterer", tags=["caterer"])
 
@@ -25,13 +28,17 @@ def dashboard(
     today_attendance = db.query(Attendance).filter(Attendance.date == today).count()
     open_complaints = db.query(Complaint).filter(Complaint.status == "open").count()
     pending_requests = db.query(SubscriptionRequest).filter(SubscriptionRequest.status == RequestStatus.pending).count()
+    pending_agent_actions = db.query(AgentAction).filter(
+        AgentAction.approval_status == ActionApprovalStatus.pending
+    ).count()
 
     return {
-        "total_students":   total_students,
-        "active_subs":      active_subs,
-        "today_attendance": today_attendance,
-        "open_complaints":  open_complaints,
-        "pending_requests": pending_requests,
+        "total_students":         total_students,
+        "active_subs":            active_subs,
+        "today_attendance":       today_attendance,
+        "open_complaints":        open_complaints,
+        "pending_requests":       pending_requests,
+        "pending_agent_actions":  pending_agent_actions,
     }
 
 # ── Menu ─────────────────────────────────────────────────────
@@ -310,3 +317,132 @@ def get_attendance(
         }
         for r in records
     ]
+
+# ── Ops Agent recommendations ────────────────────────────────
+# What the Caterer Ops Agent drafted (see app/agents/ops_agent.py) and is
+# waiting on a human for. Nothing here was sent or executed automatically —
+# every row starts approval_status="pending" and stays that way until a
+# caterer approves, edits, or rejects it below.
+PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+@router.get("/agent-actions")
+def get_agent_actions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    actions = db.query(AgentAction).filter(
+        AgentAction.approval_status == ActionApprovalStatus.pending
+    ).all()
+    # priority is a plain string column ("high"/"medium"/"low"), not a DB
+    # enum with defined ordering, so sort in Python rather than SQL —
+    # alphabetical would wrongly put "low" before "medium".
+    actions.sort(key=lambda a: (PRIORITY_ORDER.get(a.priority, 99), a.created_at))
+    return [
+        {
+            "id":              a.id,
+            "run_id":          a.run_id,
+            "category":        a.category,
+            "priority":        a.priority,
+            "summary":         a.summary,
+            "reasoning":       a.reasoning,
+            "drafted_message": a.drafted_message,
+            "related_user_id": a.related_user_id,
+            "related_date":    a.related_date,
+            "created_at":      a.created_at,
+        }
+        for a in actions
+    ]
+
+@router.post("/agent-actions/{action_id}/approve")
+def approve_agent_action(
+    action_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    action = db.query(AgentAction).filter(AgentAction.id == action_id).first()
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.approval_status != ActionApprovalStatus.pending:
+        raise HTTPException(status_code=400, detail=f"Action already {action.approval_status.value}")
+
+    action.approval_status = ActionApprovalStatus.approved
+    db.commit()
+    return {"message": f"Action {action_id} approved"}
+
+class EditAgentAction(BaseModel):
+    drafted_message: str
+
+@router.post("/agent-actions/{action_id}/edit")
+def edit_agent_action(
+    action_id: int,
+    payload: EditAgentAction,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    action = db.query(AgentAction).filter(AgentAction.id == action_id).first()
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.approval_status != ActionApprovalStatus.pending:
+        raise HTTPException(status_code=400, detail=f"Action already {action.approval_status.value}")
+    if not payload.drafted_message.strip():
+        raise HTTPException(status_code=400, detail="drafted_message cannot be empty")
+
+    # Only drafted_message is ever editable — summary/reasoning stay exactly
+    # as the model produced them, since they're the audit trail of what the
+    # agent actually found, not caterer-facing copy.
+    action.drafted_message = payload.drafted_message.strip()
+    action.approval_status = ActionApprovalStatus.edited
+    db.commit()
+    return {"message": f"Action {action_id} edited and approved"}
+
+@router.post("/agent-actions/{action_id}/reject")
+def reject_agent_action(
+    action_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    action = db.query(AgentAction).filter(AgentAction.id == action_id).first()
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.approval_status != ActionApprovalStatus.pending:
+        raise HTTPException(status_code=400, detail=f"Action already {action.approval_status.value}")
+
+    action.approval_status = ActionApprovalStatus.rejected
+    db.commit()
+    return {"message": f"Action {action_id} rejected"}
+
+@router.get("/agent-runs/health")
+def get_agent_run_health(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_caterer)
+):
+    """Latest run per cadence (daily/weekly/monthly), inferred from each
+    run's tools_consulted via tools.py's TOOL_CADENCE. agent_runs has no
+    run_mode column — none needed, see ops_agent.py's execute_and_save()
+    docstring and tools_consulted's own comment in models.py."""
+    recent_runs = db.query(AgentRun).order_by(AgentRun.created_at.desc()).limit(30).all()
+
+    latest_by_mode = {}
+    for run in recent_runs:
+        if len(latest_by_mode) == 3:
+            break
+        try:
+            tools = json.loads(run.tools_consulted) if run.tools_consulted else []
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not tools:
+            continue
+        mode = TOOL_CADENCE.get(tools[0])
+        if mode and mode not in latest_by_mode:
+            latest_by_mode[mode] = {
+                "run_id":     run.id,
+                "status":     run.status.value,
+                "created_at": run.created_at,
+                "error":      run.error,
+            }
+
+    return {
+        "daily":   latest_by_mode.get("daily"),
+        "weekly":  latest_by_mode.get("weekly"),
+        "monthly": latest_by_mode.get("monthly"),
+    }
