@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   HeartHandshake, ChefHat, MessageCircleWarning, Sparkles,
-  Check, X, Pencil, ClipboardCheck,
+  Check, X, ClipboardCheck,
 } from 'lucide-react'
 import api from '../../api/axios'
 import CatererLayout from '../../components/CatererLayout'
@@ -68,6 +68,16 @@ function HealthStrip({ health, loading }) {
   )
 }
 
+// The three tabs the caterer cares about. "general" actions (rare — a
+// catch-all the agent falls back to when nothing else fits) are folded into
+// "All" but excluded from the three named tabs so counts stay meaningful.
+const TABS = [
+  { key: 'all',                label: 'All' },
+  { key: 'churn_retention',    label: 'Churn' },
+  { key: 'headcount_prep',     label: 'Headcount' },
+  { key: 'complaint_followup', label: 'Complaints' },
+]
+
 function CatererAgentReview() {
   const [actions, setActions] = useState([])
   const [health, setHealth] = useState(null)
@@ -76,8 +86,7 @@ function CatererAgentReview() {
   const [message, setMessage] = useState('')
   const [isError, setIsError] = useState(false)
   const [busyId, setBusyId] = useState(null)
-  const [editingId, setEditingId] = useState(null)
-  const [editText, setEditText] = useState('')
+  const [activeTab, setActiveTab] = useState('all')
 
   useEffect(() => {
     fetchActions()
@@ -106,66 +115,33 @@ function CatererAgentReview() {
     }
   }
 
-  const startEdit = (action) => {
-    setMessage('')
-    setEditingId(action.id)
-    setEditText(action.drafted_message || '')
-  }
-
-  const cancelEdit = () => {
-    setEditingId(null)
-    setEditText('')
-  }
-
-  const handleApprove = async (id) => {
+  // "Read" and "Not relevant" both dismiss the card, but they record
+  // different outcomes — approved vs rejected — so we keep a record of
+  // whether the caterer agreed with what the agent flagged. Nothing is sent
+  // anywhere either way; there's no downstream email/SMS trigger wired up
+  // for these actions yet.
+  const handleMarkRead = async (id) => {
     setMessage('')
     setBusyId(id)
     try {
       await api.post(`/caterer/agent-actions/${id}/approve`)
-      setMessage('Action approved')
-      setIsError(false)
       setActions((prev) => prev.filter((a) => a.id !== id))
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Approve failed')
+      setMessage(err.response?.data?.detail || 'Could not dismiss this item')
       setIsError(true)
     } finally {
       setBusyId(null)
     }
   }
 
-  const handleSaveEdit = async (id) => {
-    if (!editText.trim()) {
-      setMessage('Drafted message cannot be empty')
-      setIsError(true)
-      return
-    }
-    setMessage('')
-    setBusyId(id)
-    try {
-      await api.post(`/caterer/agent-actions/${id}/edit`, { drafted_message: editText.trim() })
-      setMessage('Action edited and approved')
-      setIsError(false)
-      setActions((prev) => prev.filter((a) => a.id !== id))
-      setEditingId(null)
-      setEditText('')
-    } catch (err) {
-      setMessage(err.response?.data?.detail || 'Edit failed')
-      setIsError(true)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const handleReject = async (id) => {
+  const handleNotRelevant = async (id) => {
     setMessage('')
     setBusyId(id)
     try {
       await api.post(`/caterer/agent-actions/${id}/reject`)
-      setMessage('Action rejected')
-      setIsError(false)
       setActions((prev) => prev.filter((a) => a.id !== id))
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Reject failed')
+      setMessage(err.response?.data?.detail || 'Could not dismiss this item')
       setIsError(true)
     } finally {
       setBusyId(null)
@@ -175,9 +151,35 @@ function CatererAgentReview() {
   return (
     <CatererLayout
       title="Agent Recommendations"
-      subtitle="What the Ops Agent found — review, edit, or dismiss each item. Nothing sends until you approve it."
+      subtitle="What the Ops Agent found. Mark each item as read once you've seen it."
     >
       <HealthStrip health={health} loading={healthLoading} />
+
+      {!loading && (
+        <div className="flex items-center gap-1.5 mb-5 border-b border-ink/10">
+          {TABS.map((tab) => {
+            const count = tab.key === 'all'
+              ? actions.length
+              : actions.filter((a) => a.category === tab.key).length
+            const isActive = activeTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`relative px-3.5 py-2.5 text-sm font-medium transition ${
+                  isActive ? 'text-ink' : 'text-ink/45 hover:text-ink/70'
+                }`}
+              >
+                {tab.label}
+                <span className={`ml-1.5 text-xs ${isActive ? 'text-ink/50' : 'text-ink/30'}`}>{count}</span>
+                {isActive && (
+                  <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-emerald rounded-full" />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {message && (
         <div className={`text-sm rounded-lg px-3 py-2 mb-4 ${isError ? 'text-red bg-red/10' : 'text-emerald-dark bg-emerald/10'}`}>
@@ -185,140 +187,99 @@ function CatererAgentReview() {
         </div>
       )}
 
-      {!loading && (
-        <p className="text-xs font-medium text-ink/50 uppercase tracking-wide mb-3">
-          {actions.length} pending recommendation{actions.length !== 1 ? 's' : ''}
-        </p>
-      )}
+      {(() => {
+        const visibleActions = activeTab === 'all'
+          ? actions
+          : actions.filter((a) => a.category === activeTab)
 
-      {loading ? (
-        <div className="bg-white rounded-xl border border-ink/10 p-5 text-sm text-ink/40 animate-pulse">Loading…</div>
-      ) : actions.length === 0 ? (
-        <div className="bg-white rounded-xl border border-ink/10 p-10 text-center">
-          <ClipboardCheck className="w-6 h-6 text-ink/20 mx-auto mb-2" />
-          <p className="text-sm text-ink/50">All caught up — no pending recommendations.</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {actions.map((action) => {
-            const catMeta = CATEGORY_META[action.category]
-              || { label: action.category, icon: Sparkles, accent: 'text-ink/60', bg: 'bg-ink/5' }
-            const priMeta = PRIORITY_META[action.priority]
-              || { label: action.priority, border: 'border-ink/15', dot: 'bg-ink/25' }
-            const Icon = catMeta.icon
-            const isEditing = editingId === action.id
-            const isBusy = busyId === action.id
+        if (loading) {
+          return <div className="bg-white rounded-xl border border-ink/10 p-5 text-sm text-ink/40 animate-pulse">Loading…</div>
+        }
 
-            return (
-              <div
-                key={action.id}
-                className={`bg-white rounded-xl border border-ink/10 border-l-4 ${priMeta.border} p-6`}
-              >
-                <div className="flex items-start justify-between gap-4 mb-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-9 h-9 rounded-full ${catMeta.bg} flex items-center justify-center shrink-0`}>
-                      <Icon className={`w-4 h-4 ${catMeta.accent}`} />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-ink/70">{catMeta.label}</span>
-                        <span className="inline-flex items-center gap-1 text-xs text-ink/40">
-                          <span className={`w-1.5 h-1.5 rounded-full ${priMeta.dot}`} />
-                          {priMeta.label}
-                        </span>
-                      </div>
-                      {(action.related_user_id || action.related_date) && (
-                        <p className="text-xs text-ink/40 mt-0.5">
-                          {action.related_user_id && `Student #${action.related_user_id}`}
-                          {action.related_user_id && action.related_date && ' · '}
-                          {action.related_date && `for ${action.related_date}`}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-xs text-ink/30 shrink-0">{action.created_at}</span>
-                </div>
+        return (
+          <>
+            <p className="text-xs font-medium text-ink/50 uppercase tracking-wide mb-3">
+              {visibleActions.length} pending recommendation{visibleActions.length !== 1 ? 's' : ''}
+            </p>
 
-                <p className="text-[15px] font-semibold text-ink leading-snug mb-4">{action.summary}</p>
-
-                <div className="border-l-2 border-ink/10 pl-3.5 mb-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/40 mb-1">Why</p>
-                  <p className="text-sm text-ink/70 leading-relaxed">{action.reasoning}</p>
-                </div>
-
-                {(action.drafted_message || isEditing) && (
-                  <div className="mb-5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/40 mb-1.5">Drafted message</p>
-                    {isEditing ? (
-                      <textarea
-                        value={editText}
-                        onChange={(e) => setEditText(e.target.value)}
-                        rows={3}
-                        className="w-full px-3.5 py-3 rounded-lg border border-ink/10 bg-cream-dim text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-emerald transition resize-none"
-                      />
-                    ) : (
-                      <div className="bg-cream-dim rounded-lg p-3.5 text-sm text-ink">
-                        {action.drafted_message}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  {isEditing ? (
-                    <>
-                      <button
-                        onClick={() => handleSaveEdit(action.id)}
-                        disabled={isBusy}
-                        className="inline-flex items-center gap-1.5 bg-emerald hover:bg-emerald-dark disabled:opacity-40 text-white text-sm font-medium px-3 py-2 rounded-lg transition"
-                      >
-                        <Check className="w-4 h-4" />
-                        Save & approve
-                      </button>
-                      <button
-                        onClick={cancelEdit}
-                        disabled={isBusy}
-                        className="inline-flex items-center gap-1.5 bg-white border border-ink/10 hover:bg-ink/5 disabled:opacity-40 text-ink/70 text-sm font-medium px-3 py-2 rounded-lg transition"
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => handleApprove(action.id)}
-                        disabled={isBusy}
-                        className="inline-flex items-center gap-1.5 bg-emerald hover:bg-emerald-dark disabled:opacity-40 text-white text-sm font-medium px-3 py-2 rounded-lg transition"
-                      >
-                        <Check className="w-4 h-4" />
-                        Approve
-                      </button>
-                      {action.drafted_message && (
-                        <button
-                          onClick={() => startEdit(action)}
-                          disabled={isBusy}
-                          className="inline-flex items-center gap-1.5 bg-white border border-ink/10 hover:bg-ink/5 disabled:opacity-40 text-ink/70 text-sm font-medium px-3 py-2 rounded-lg transition"
-                        >
-                          <Pencil className="w-4 h-4" />
-                          Edit
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleReject(action.id)}
-                        disabled={isBusy}
-                        className="inline-flex items-center gap-1.5 bg-white border border-ink/10 hover:bg-red/5 hover:border-red/30 disabled:opacity-40 text-ink/70 hover:text-red text-sm font-medium px-3 py-2 rounded-lg transition"
-                      >
-                        <X className="w-4 h-4" />
-                        Reject
-                      </button>
-                    </>
-                  )}
-                </div>
+            {visibleActions.length === 0 ? (
+              <div className="bg-white rounded-xl border border-ink/10 p-10 text-center">
+                <ClipboardCheck className="w-6 h-6 text-ink/20 mx-auto mb-2" />
+                <p className="text-sm text-ink/50">All caught up — no pending recommendations.</p>
               </div>
-            )
-          })}
-        </div>
-      )}
+            ) : (
+              <div className="space-y-4">
+                {visibleActions.map((action) => {
+                  const catMeta = CATEGORY_META[action.category]
+                    || { label: action.category, icon: Sparkles, accent: 'text-ink/60', bg: 'bg-ink/5' }
+                  const priMeta = PRIORITY_META[action.priority]
+                    || { label: action.priority, border: 'border-ink/15', dot: 'bg-ink/25' }
+                  const Icon = catMeta.icon
+                  const isBusy = busyId === action.id
+
+                  return (
+                    <div
+                      key={action.id}
+                      className={`bg-white rounded-xl border border-ink/10 border-l-4 ${priMeta.border} p-6`}
+                    >
+                      <div className="flex items-start justify-between gap-4 mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-full ${catMeta.bg} flex items-center justify-center shrink-0`}>
+                            <Icon className={`w-4 h-4 ${catMeta.accent}`} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-ink/70">{catMeta.label}</span>
+                              <span className="inline-flex items-center gap-1 text-xs text-ink/40">
+                                <span className={`w-1.5 h-1.5 rounded-full ${priMeta.dot}`} />
+                                {priMeta.label}
+                              </span>
+                            </div>
+                            {(action.related_user_id || action.related_date) && (
+                              <p className="text-xs text-ink/40 mt-0.5">
+                                {action.related_user_id && `Student #${action.related_user_id}`}
+                                {action.related_user_id && action.related_date && ' · '}
+                                {action.related_date && `for ${action.related_date}`}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <span className="text-xs text-ink/30 shrink-0">{action.created_at}</span>
+                      </div>
+
+                      <p className="text-[15px] font-semibold text-ink leading-snug mb-4">{action.summary}</p>
+
+                      <div className="border-l-2 border-ink/10 pl-3.5 mb-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink/40 mb-1">Why</p>
+                        <p className="text-sm text-ink/70 leading-relaxed">{action.reasoning}</p>
+                      </div>
+
+                      <div className="flex items-center gap-4">
+                        <button
+                          onClick={() => handleMarkRead(action.id)}
+                          disabled={isBusy}
+                          className="inline-flex items-center gap-1.5 bg-emerald hover:bg-emerald-dark disabled:opacity-40 text-white text-sm font-medium px-3 py-2 rounded-lg transition"
+                        >
+                          <Check className="w-4 h-4" />
+                          Read
+                        </button>
+                        <button
+                          onClick={() => handleNotRelevant(action.id)}
+                          disabled={isBusy}
+                          className="inline-flex items-center gap-1 text-ink/40 hover:text-red disabled:opacity-40 text-xs font-medium transition"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          Not relevant
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>
+        )
+      })()}
     </CatererLayout>
   )
 }
